@@ -1,0 +1,8 @@
+# Environment
+venv
+
+# VSCode Settings
+.vscode
+
+# MacOS stuff
+.DS_Store
