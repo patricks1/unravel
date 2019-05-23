@@ -1,22 +1,23 @@
 #!venv/bin/python
 '''Unravel, Piazza Deanonymizer'''
 import argparse
+import time
+
 from piazza_api import Piazza
-from tinydb import TinyDB, Query
+from tinydb import TinyDB
 from jsondiff import diff
-from tinydb.operations import delete
 
 
 def get_statistics(email, password, class_id):
-    """Logins to Piazza and retrieves the statistics of a course.
+    """Logins to Piazza and retrieves the statistics of a class.
 
     Args:
         email: Piazza username.
         password: Piazza password.
-        class_id: Course ID on Piazza.
+        class_id: Class ID on Piazza.
 
     Returns:
-        A JSON formatted course statistics.
+        A JSON formatted class statistics.
 
     Raises:
         piazza_api.exceptions.AuthenticationError:
@@ -24,8 +25,7 @@ def get_statistics(email, password, class_id):
     """
     piazza = Piazza()
     piazza.user_login(email, password)
-    course = piazza.network(class_id)
-    return course.get_statistics()
+    return piazza.network(class_id).get_statistics()
 
 
 def parse_arguments():
@@ -35,7 +35,7 @@ def parse_arguments():
         {
             email: Piazza username.
             password: Piazza password.
-            class_id: Course ID on Piazza.
+            class_id: Class ID on Piazza.
         }
 
     Raises:
@@ -57,15 +57,47 @@ def parse_arguments():
 
 
 def main():
+    '''Get the cli args and start tracking.'''
     args = parse_arguments()
+    # TODO: Update the sleep time
+    while True:
+        track(args)
+        time.sleep(5)
+
+
+def track(args):
+    """Tracks the statistics of the Piazza class and checks the diff
+    of the users in two records to find the poster.
+
+    Args:
+        args: {
+            email: Piazza username.
+            password: Piazza password.
+            class_id: Class ID on Piazza.
+        }
+    """
 
     stats = get_statistics(args.email, args.password, args.class_id)
     stats = {'users': stats['users'],
              'total': stats['total'], 'top': stats['top_users']}
+
     # Create/load tinydb for the class
     tinydb = TinyDB(f'{args.class_id}.json', default_table="class_stats")
-    # Insert the new statistics
+    # Insert the new stats record to the database
     tinydb.insert(stats)
+    # Find the difference between this stats and the previous one
+    if len(tinydb.all()) == 2:
+        find_diff(args.class_id)
+        tinydb.purge()
+        tinydb.insert(stats)
+    elif len(tinydb.all()) < 2:
+        print("No previous record. Program will start comparing with the next record.")
+    else:
+        # There should not be more than 2 records in the database anytime.
+        # Delete the database and start over.
+        print("Number of recors are greater than 2. Removing all but the most recent one.")
+        tinydb.purge()
+        tinydb.insert(stats)
 
 
 def sanitize_user(user):
@@ -85,13 +117,16 @@ def sanitize_user(user):
     return user
 
 
-def find_diff():
+def find_diff(class_id):
     """Compares the previous and current class statistics.
+
+    Args:
+        class_id: Class ID on Piazza.
 
     Searches for difference in a user between two statistics records
     in the tinydb database, prints the users with difference.
     """
-    tinydb = TinyDB('jssylhyqghvxn.json', default_table="class_stats")
+    tinydb = TinyDB(f'{class_id}.json', default_table="class_stats")
 
     total_info = tinydb.all()[0].get('total')
     print(f'Total in the class: {total_info}')
