@@ -4,5 +4,9 @@ venv
 # VSCode Settings
 .vscode
 
+
+# TinyDB JSON file for class
+*.json
+
 # MacOS stuff
 .DS_Store
