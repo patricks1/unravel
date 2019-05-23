@@ -4,6 +4,7 @@ certifi==2019.3.9
 chardet==3.0.4
 idna==2.8
 isort==4.3.20
+jsondiff==1.1.2
 lazy-object-proxy==1.4.1
 mccabe==0.6.1
 piazza-api==0.10.0
