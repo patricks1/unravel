@@ -1,31 +1,70 @@
-#!venv/bin/python
-'''Unravel, Piazza Deanonymizer'''
+"""Unravel, Piazza Deanonymizer"""
 import argparse
 import time
+import json
 
 from piazza_api import Piazza
 from tinydb import TinyDB
 from jsondiff import diff
 
 
-def get_statistics(email, password, class_id):
-    """Logins to Piazza and retrieves the statistics of a class.
+def get_change_content(children, when):
+    """Checks every childrens history recursively to find the content
+    of the change.
 
     Args:
-        email: Piazza username.
-        password: Piazza password.
-        class_id: Class ID on Piazza.
+        children: children array of the post dict.
+        when: Time of change log dict.
 
     Returns:
-        A JSON formatted class statistics.
+        Content of the change in HTML format.
+    """
+    for child in children:
+        if child.get('updated') == when:
+            return child.get('subject')
+        if child.get('history') is not None:  # an answer
+            for hist in child.get('history'):
+                if hist.get('created') == when:
+                    return hist.get('content')
+        elif len(child.get('children')) >= 1:
+            found = get_change_content(child['children'], when)
+            if found is not None:
+                return found
+    return None
+
+
+def retrieve_posts(piazza_class):
+    """Retrieve posts of the class.
+
+    Args:
+        piazza_class: Piazza class instance.
+
+    Returns:
+        Dict of every post in the class.
+    """
+    feed = piazza_class.iter_all_posts()
+    posts = {}
+    for index, post in enumerate(feed):
+        posts[index] = post
+    return posts
+
+
+def sanitize_user(user):
+    """Sanitizes the given dict by removing the following keys:
+        lti_ids, user_id, days, views
+        These fields pollute the diff result unnecessarily.
+
+    Args:
+        user: User dict.
+
+    Returns:
+        A sanitized user dict.
 
     Raises:
-        piazza_api.exceptions.AuthenticationError:
-            If authentication fails.
+        KeyError: If any of the mentioned keys does not exist.
     """
-    piazza = Piazza()
-    piazza.user_login(email, password)
-    return piazza.network(class_id).get_statistics()
+    del user['lti_ids'], user['user_id'], user['days'], user['views']
+    return user
 
 
 def parse_arguments():
@@ -56,95 +95,142 @@ def parse_arguments():
     return args
 
 
-def main():
-    '''Get the cli args and start tracking.'''
-    args = parse_arguments()
-    # TODO: Update the sleep time
-    while True:
-        track(args)
-        time.sleep(5)
-
-
-def track(args):
-    """Tracks the statistics of the Piazza class and checks the diff
-    of the users in two records to find the poster.
+def track(piazza, class_id, userdb, postdb):
+    """Tracks the user statistics of the Piazza class
+    and the posts data of the class to find the anonymous poster and the post.
 
     Args:
-        args: {
-            email: Piazza username.
-            password: Piazza password.
-            class_id: Class ID on Piazza.
-        }
+        piazza: Logged in Piazza instance.
+        class_id: Class ID on Piazza for tracking.
+        userdb: User TinyDB database.
+        postdb: Post TinyDB database.
     """
+    piazza_class = piazza.network(class_id)
 
-    stats = get_statistics(args.email, args.password, args.class_id)
+    if not postdb.all():
+        postdb.insert(retrieve_posts(piazza_class))
+
+    # Insert the new stats record to the database
+    stats = piazza_class.get_statistics()
     stats = {'users': stats['users'],
              'total': stats['total'], 'top': stats['top_users']}
+    userdb.insert(stats)
 
-    # Create/load tinydb for the class
-    tinydb = TinyDB(f'{args.class_id}.json', default_table="class_stats")
-    # Insert the new stats record to the database
-    tinydb.insert(stats)
     # Find the difference between this stats and the previous one
-    if len(tinydb.all()) == 2:
-        find_diff(args.class_id)
-        tinydb.purge()
-        tinydb.insert(stats)
-    elif len(tinydb.all()) < 2:
+    if len(userdb.all()) == 2:
+        find_diffs(piazza_class, userdb, postdb)
+        userdb.purge()
+        userdb.insert(stats)
+    elif len(userdb.all()) < 2:
         print("No previous record. Program will start comparing with the next record.")
     else:
-        # There should not be more than 2 records in the database anytime.
-        # Delete the database and start over.
-        print("Number of recors are greater than 2. Removing all but the most recent one.")
-        tinydb.purge()
-        tinydb.insert(stats)
+        print("Number of records are greater than 2. Removing all but the most recent one.")
+        userdb.purge()
+        postdb.purge()
+        userdb.insert(stats)
 
 
-def sanitize_user(user):
-    """Sanitizes the given json by removing the following keys:
-        lti_ids, user_id, days, views
+def find_post_diff(postdb):
+    """Compares the previous and current posts data.
 
     Args:
-        user: Json object for user.
+        postdb: Post TinyDB database.
 
     Returns:
-        A sanitized JSON user object.
-
-    Raises:
-        KeyError: If any of the mentioned keys does not exist.
+        The diff dict of an updated posts change log.
+        {
+            cid: Post CID on Piazza
+            content: Updated text
+            diff_type: Change type on the post
+            time: Date of change
+        }
     """
-    del user['lti_ids'], user['user_id'], user['days'], user['views']
-    return user
+    prev = postdb.all()[0]
+    curr = postdb.all()[1]
+
+    if len(prev) > len(curr):  # New post
+        recent = prev['0']['history'][-1]
+        subject = recent['subject']
+        when = recent['created']
+        return {
+            "cid": prev['0']['nr'],
+            "content": subject,
+            "diff_type": "post_delete",
+            "time": when
+        }
+    if len(prev) < len(curr):
+        recent = curr['0']['history'][-1]
+        subject = recent['subject']
+        when = recent['created']
+        return {
+            "cid": curr['0']['nr'],
+            "content": subject,
+            "diff_type": "post_add",
+            "time": when
+        }
+    for post in prev:
+        # Find a difference in a post change log
+        difference = diff(prev[post]['change_log'], curr[post]
+                          ['change_log'], syntax='explicit', dump=True)
+        difference = json.loads(difference)  # Convert to json
+        if difference != {}:
+            try:
+                diff_type = difference['$insert'][0][1]['type']
+                when = difference['$insert'][0][1]['when']
+            except KeyError:
+                print(f'Key Error: s$insert {difference}')
+            change = get_change_content(curr[post]['children'], when)
+            return {
+                "cid": curr[post]['nr'],
+                "content": change,
+                "diff_type": diff_type,
+                "time": when
+            }
+    return None
 
 
-def find_diff(class_id):
+def find_diffs(piazza_class, userdb, postdb):
     """Compares the previous and current class statistics.
+    Diffs every user dict in previous and the current record.
 
     Args:
-        class_id: Class ID on Piazza.
-
-    Searches for difference in a user between two statistics records
-    in the tinydb database, prints the users with difference.
+        userdb: User TinyDB database.
+        postdb: Post TinyDB database.
     """
-    tinydb = TinyDB(f'{class_id}.json', default_table="class_stats")
 
-    total_info = tinydb.all()[0].get('total')
-    print(f'Total in the class: {total_info}')
-
-    prev = tinydb.all()[0].get('users')
-    curr = tinydb.all()[1].get('users')
+    prev = userdb.all()[0].get('users')
+    curr = userdb.all()[1].get('users')
 
     # Find a difference in a user data between two statistics records
-    found = False
+    user = None
+
     for index, prev_user in enumerate(prev):
         prev_user = sanitize_user(prev_user)
         curr[index] = sanitize_user(curr[index])
-        if diff(prev_user, curr[index], syntax='explicit') != {}:
-            print(curr[index])
-            found = True
+        difference = diff(prev_user, curr[index], syntax='explicit')
+        if difference != {}:
+            user = {"name": curr[index]['name'], "email": curr[index]['email']}
 
-    if not found:
-        print("There was no difference")
+    if user is not None:
+        posts = retrieve_posts(piazza_class)
+        postdb.insert(posts)
+        post_diff = find_post_diff(postdb)
+        postdb.purge()
+        postdb.insert(posts)
+        print(user, post_diff)
+
+
+def main():
+    """Get the cli args and start tracking."""
+    args = parse_arguments()
+    piazza = Piazza()
+    piazza.user_login(args.email, args.password)
+    # Create/load tinydb for the users and posts
+    userdb = TinyDB(f'{args.class_id}.json', default_table="users")
+    postdb = TinyDB(f'{args.class_id}.json', default_table="posts")
+    while True:
+        track(piazza, args.class_id, userdb, postdb)
+        time.sleep(2)
 
 
 if __name__ == '__main__':
