@@ -42,4 +42,16 @@ python unravel.py -u piazza_username -p piazza_password -c piazza_class_id
 
 - For command-line argument descriptions: `python unravel.py -h`
 
+```console
+Piazza Post Deanonymzer.
+
+optional arguments:
+  -h, --help   show this help message and exit
+
+Piazza Authentication:
+  -u email     Piazza account email
+  -p password  Piazza account password
+  -c class_id  Class id from piazza.com/class/{class_id}
+```
+
 > This is a work in progress, definitely buggy, proof of concept application. Any [feedback](https://github.com/eralpsahin/unravel/issues/new?body=Hi,%0A%0A) is appreciated!
