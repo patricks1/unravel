@@ -6,7 +6,7 @@ import json
 from piazza_api import Piazza
 from tinydb import TinyDB
 from jsondiff import diff
-
+#from progressbar import ProgressBar
 
 def get_change_content(children, when):
     """Checks every childrens history recursively to find the content
@@ -19,6 +19,7 @@ def get_change_content(children, when):
     Returns:
         Content of the change in HTML format.
     """
+
     for child in children:
         if child.get('updated') == when:
             return child.get('subject')
@@ -42,9 +43,13 @@ def retrieve_posts(piazza_class):
     Returns:
         Dict of every post in the class.
     """
+
     feed = piazza_class.iter_all_posts()
     posts = {}
-    for index, post in enumerate(feed):
+    print('Diff found.')
+    for index,post in enumerate(feed):
+        print('Retrieving post {0:d}.'.format(index+1), end='\r')
+        time.sleep(1)
         posts[index] = post
     return posts
 
@@ -80,6 +85,7 @@ def parse_arguments():
     Raises:
         ArgumentError: If any of the arguments is missing.
     """
+
     parser = argparse.ArgumentParser(description='Piazza Post Deanonymzer.')
     group = parser.add_argument_group('Piazza Authentication')
     group.add_argument('-u', metavar='email', type=str,
@@ -105,6 +111,7 @@ def track(piazza, class_id, userdb, postdb):
         userdb: User TinyDB database.
         postdb: Post TinyDB database.
     """
+
     piazza_class = piazza.network(class_id)
 
     if not postdb.all():
@@ -145,6 +152,7 @@ def find_post_diff(postdb):
             time: Date of change
         }
     """
+
     prev = postdb.all()[0]
     curr = postdb.all()[1]
 
@@ -178,7 +186,7 @@ def find_post_diff(postdb):
                 diff_type = difference['$insert'][0][1]['type']
                 when = difference['$insert'][0][1]['when']
             except KeyError:
-                print(f'Key Error: s$insert {difference}')
+                print('Key Error: {}'.format(difference))
             change = get_change_content(curr[post]['children'], when)
             return {
                 "cid": curr[post]['nr'],
@@ -226,11 +234,11 @@ def main():
     piazza = Piazza()
     piazza.user_login(args.email, args.password)
     # Create/load tinydb for the users and posts
-    userdb = TinyDB(f'{args.class_id}.json', default_table="users")
-    postdb = TinyDB(f'{args.class_id}.json', default_table="posts")
+    userdb = TinyDB('{}.json'.format(args.class_id), default_table="users")
+    postdb = TinyDB('{}.json'.format(args.class_id), default_table="posts")
     while True:
         track(piazza, args.class_id, userdb, postdb)
-        time.sleep(2)
+        time.sleep(3)
 
 
 if __name__ == '__main__':
