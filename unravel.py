@@ -226,7 +226,14 @@ def find_diffs(piazza_class, userdb, postdb):
         postdb.purge()
         postdb.insert(posts)
         print(user, post_diff)
-
+        fname='./history'
+        def update_hist(mode,mod=''):
+            with open(fname+mod+'.txt',mode) as f:
+                f.write(user,post_diff)
+        try:
+            update('a')
+        except FileNotFoundError:
+            update_hist('w')
 
 def main():
     """Get the cli args and start tracking."""
