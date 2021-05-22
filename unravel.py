@@ -229,9 +229,9 @@ def find_diffs(piazza_class, userdb, postdb):
         fname='./history'
         def update_hist(mode,mod=''):
             with open(fname+mod+'.txt',mode) as f:
-                f.write(user,post_diff)
+                f.write(str(user)+'\n'+str(post_diff))
         try:
-            update('a')
+            update_hist('a')
         except FileNotFoundError:
             update_hist('w')
 
