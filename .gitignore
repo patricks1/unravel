@@ -10,3 +10,5 @@ venv
 
 # MacOS stuff
 .DS_Store
+
+*.txt
